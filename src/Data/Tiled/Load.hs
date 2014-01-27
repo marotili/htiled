@@ -1,4 +1,4 @@
-{-# LANGUAGE Arrows, UnicodeSyntax, RecordWildCards #-}
+{-# LANGUAGE Arrows, UnicodeSyntax, RecordWildCards, NamedFieldPuns #-}
 module Data.Tiled.Load (loadMapFile, loadMap) where
 
 import Prelude hiding ((.), id)
@@ -147,21 +147,74 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
 
 tilesets ∷ IOSArrow XmlTree [Tileset]
 tilesets = listA $ getChildren >>> isElem >>> hasName "tileset"
-         >>> proc ts → do
-              tsName        ← getAttrValue "name"     ⤙ ts
-              tsInitialGid  ← getAttrR "firstgid"     ⤙ ts
-              tsTileWidth   ← getAttrR "tilewidth"    ⤙ ts
-              tsTileHeight  ← getAttrR "tileheight"   ⤙ ts
-              tsMargin      ← (arr $ fromMaybe 0) . getAttrMaybe "margin" ⤙ ts
-              tsSpacing     ← (arr $ fromMaybe 0) . getAttrMaybe "spacing" ⤙ ts
-              tsImages      ← images                  ⤙ ts
-              tsTileProperties ← listA tileProperties ⤙ ts
-              returnA ⤙ Tileset {..}
+         >>> tileData Nothing
+
+liftArrIO :: (a -> IO b) -> IOSLA s a b
+liftArrIO f = IOSLA $ \s x -> fmap (\y -> (s, [y])) (f x)
+
+data TileSetHead = TileSetHead 
+  { tshSource :: String
+  , tshInitialGid :: Word32
+}
+
+tileData :: Maybe TileSetHead -> IOSArrow XmlTree Tileset
+tileData headData = proc ts → do
+      t <- path1 `orElse` tData -< ts
+      test <- liftArrIO (\x -> do
+        print x
+        print "After path1"
+        ) -< t
+      returnA -< t
+
   where tileProperties ∷ IOSArrow XmlTree (Word32, Properties)
         tileProperties = getChildren >>> isElem >>> hasName "tile"
                      >>> getAttrR "id" &&& properties
 
         images = listA (getChildren >>> image)
+
+        path1 :: IOSArrow XmlTree Tileset
+        path1 = hasAttr "source" >>> headDataA >>> liftArrIO (\hData ->
+              loadTileSet (readDocument [] (tshSource hData)) hData)
+
+        headDataA = proc ts -> do
+          tshSource <- getAttrValue "source" -< ts
+          tshInitialGid <- getAttrR "firstgid" -< ts
+          returnA -< TileSetHead{..}
+
+        tData :: IOSArrow XmlTree Tileset
+        tData = proc ts -> do
+          test <- liftArrIO (\x ->
+            print "Before path2"
+            ) -< ts
+
+          tsName        ← getAttrValue "name"     ⤙ ts
+          tsInitialGid  ← (case headData of 
+            Just (TileSetHead { tshInitialGid }) -> liftArrIO (return . return tshInitialGid)
+            _ -> getAttrR "firstgid")     ⤙ ts
+          tsTileWidth   ← getAttrR "tilewidth"    ⤙ ts
+          tsTileHeight  ← getAttrR "tileheight"   ⤙ ts
+          tsMargin      ← (arr $ fromMaybe 0) . getAttrMaybe "margin" ⤙ ts
+          tsSpacing     ← (arr $ fromMaybe 0) . getAttrMaybe "spacing" ⤙ ts
+          tsImages      ← images                  ⤙ ts
+          tsTileProperties ← listA tileProperties ⤙ ts
+
+          test <- liftArrIO (\x ->
+            print "After path2"
+            ) -< ts
+          returnA ⤙ Tileset {..}
+
+loadTileSet ∷ IOStateArrow () XmlTree XmlTree -> TileSetHead -> IO Tileset
+loadTileSet a headData = head `fmap` runX (
+        configSysVars [withValidate no, withWarnings yes]
+    >>> a
+
+    >>> getChildren >>> isElem
+
+    >>> tileData (Just headData)
+    >>> liftArrIO (\x -> do
+      print x
+      return x)
+    )
 
 image ∷ IOSArrow XmlTree Image
 image = isElem >>> hasName "image" >>> proc img → do
