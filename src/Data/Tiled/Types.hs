@@ -26,8 +26,10 @@ data TiledMap = TiledMap
 data Tileset = Tileset
              { tsName                    ∷ String
              , tsInitialGid              ∷ Word32
+             , tsSource                  :: String
              , tsTileWidth, tsTileHeight ∷ Int
              , tsSpacing, tsMargin       ∷ Int
+             , tsTileImages :: Map Word32 Image
              , tsImages                  ∷ [Image] -- ^ Multiple images not
                                                    -- yet supported in tiled.
              , tsTileProperties          ∷ [(Word32, Properties)]

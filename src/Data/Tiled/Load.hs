@@ -9,7 +9,7 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (digitToInt)
 import Data.List (sort)
-import Data.Map (fromDistinctAscList, Map)
+import Data.Map (fromDistinctAscList, Map, fromList)
 import Data.Maybe (listToMaybe, fromMaybe, isNothing)
 import Data.Word (Word32)
 
@@ -107,18 +107,34 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
 
     doData = first (getChildren >>> isElem >>> hasName "data")
          >>> proc (dat, (w, h)) → do
+                liftArrIO (\inp -> print "Enter") -< dat
                 encoding    ← getAttrValue "encoding"        ⤙ dat
+                liftArrIO (\inp -> print "Enter1") -< dat
                 compression ← getAttrValue "compression"     ⤙ dat
-                text        ← getText . isText . getChildren ⤙ dat
-                returnA ⤙ dataToTiles w h encoding compression text
+                liftArrIO (\inp -> print "Enter2") -< dat
+                --text        ← getText . isText . getChildren ⤙ dat
+                --liftArrIO (\inp -> print "Enter3") -< dat
+
+                tiles <- listA (getChildren >>> isElem >>> hasName "tile" >>> tileProc) -< (dat :: XmlTree)
+                liftArrIO (\_ -> print "Tiles") -< dat
+
+                returnA ⤙ (toMap w h tiles)-- `orElse` (dataToTiles w h encoding compression text)
+
+      where
+        tileProc = proc tile -> do
+          gid <- getAttrR "gid" -< (tile :: XmlTree)
+          returnA -< Tile { tileGid=gid, tileIsVFlipped=False, tileIsHFlipped=False, tileIsDiagFlipped=False }
+                  
 
     -- Width → Height → Encoding → Compression → Data → [Tile]
     dataToTiles ∷ Int → Int → String → String → String → Map (Int, Int) Tile
     dataToTiles w h "base64" "gzip" = toMap w h . base64 GZip.decompress
     dataToTiles w h "base64" "zlib" = toMap w h . base64 Zlib.decompress
-    dataToTiles _ _ _ _ = error "unsupported tile data format, only base64 and \
-                                \gzip/zlib is supported at the moment."
+    dataToTiles w h "" "" = toMap w h . bytesToTiles . LBS.unpack . LBS.fromChunks . (:[]) . BS.pack
+    dataToTiles _ _ b c = error ("unsupported tile data format, only base64 and \
+                               \gzip/zlib is supported at the moment." ++ show (b, c))
 
+    toMap :: Int -> Int -> [Tile] -> Map (Int, Int) Tile
     toMap w h = fromDistinctAscList . sort . filter (\(_, x) → tileGid x /= 0)
                 . zip [(x, y) | y ← [0..h-1], x ← [0..w-1]]
 
@@ -133,7 +149,7 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
             tileIsHFlipped = n `testBit` 31
             tileIsDiagFlipped = n `testBit` 29
     bytesToTiles [] = []
-    bytesToTiles _ = error "number of bytes not a multiple of 4."
+    bytesToTiles rest = error ("number of bytes not a multiple of 4." ++ show rest)
 
     common = proc (l, x) → do
         layerName       ← getAttrValue "name"              ⤙ l
@@ -155,15 +171,11 @@ liftArrIO f = IOSLA $ \s x -> fmap (\y -> (s, [y])) (f x)
 data TileSetHead = TileSetHead 
   { tshSource :: String
   , tshInitialGid :: Word32
-}
+  }
 
 tileData :: Maybe TileSetHead -> IOSArrow XmlTree Tileset
 tileData headData = proc ts → do
       t <- path1 `orElse` tData -< ts
-      test <- liftArrIO (\x -> do
-        print x
-        print "After path1"
-        ) -< t
       returnA -< t
 
   where tileProperties ∷ IOSArrow XmlTree (Word32, Properties)
@@ -171,10 +183,11 @@ tileData headData = proc ts → do
                      >>> getAttrR "id" &&& properties
 
         images = listA (getChildren >>> image)
+        --tiles = listA ()
 
         path1 :: IOSArrow XmlTree Tileset
         path1 = hasAttr "source" >>> headDataA >>> liftArrIO (\hData ->
-              loadTileSet (readDocument [] (tshSource hData)) hData)
+              loadTileSet (readDocument [] ("data/" ++ tshSource hData)) hData)
 
         headDataA = proc ts -> do
           tshSource <- getAttrValue "source" -< ts
@@ -183,10 +196,6 @@ tileData headData = proc ts → do
 
         tData :: IOSArrow XmlTree Tileset
         tData = proc ts -> do
-          test <- liftArrIO (\x ->
-            print "Before path2"
-            ) -< ts
-
           tsName        ← getAttrValue "name"     ⤙ ts
           tsInitialGid  ← (case headData of 
             Just (TileSetHead { tshInitialGid }) -> liftArrIO (return . return tshInitialGid)
@@ -197,24 +206,29 @@ tileData headData = proc ts → do
           tsSpacing     ← (arr $ fromMaybe 0) . getAttrMaybe "spacing" ⤙ ts
           tsImages      ← images                  ⤙ ts
           tsTileProperties ← listA tileProperties ⤙ ts
-
-          test <- liftArrIO (\x ->
-            print "After path2"
-            ) -< ts
-          returnA ⤙ Tileset {..}
+          tileIds <- listA (getChildren >>> tileId) -< ts
+          tileImages <- listA (getChildren >>> tileImage) -< ts
+          let tileimgs = fromList $ zip tileIds (concat tileImages)
+          returnA ⤙ (Tileset {..}) { tsTileImages = tileimgs, tsSource = ""}
 
 loadTileSet ∷ IOStateArrow () XmlTree XmlTree -> TileSetHead -> IO Tileset
 loadTileSet a headData = head `fmap` runX (
         configSysVars [withValidate no, withWarnings yes]
     >>> a
-
     >>> getChildren >>> isElem
-
     >>> tileData (Just headData)
-    >>> liftArrIO (\x -> do
-      print x
-      return x)
     )
+
+tileId :: IOSArrow XmlTree Word32
+tileId = isElem >>> hasName "tile" >>> proc tile -> do
+  id <- getAttrR "id" -< tile
+  returnA -< id
+
+tileImage :: IOSArrow XmlTree [Image]
+tileImage = isElem >>> hasName "tile" >>> listA (getChildren >>> proc tile -> do
+    image <- image -< tile
+    returnA -< image
+  )
 
 image ∷ IOSArrow XmlTree Image
 image = isElem >>> hasName "image" >>> proc img → do
@@ -222,7 +236,7 @@ image = isElem >>> hasName "image" >>> proc img → do
     iTrans  ← arr (fmap colorToTriplet . listToMaybe) . listA (getAttrValue0 "trans") ⤙ img
     iWidth  ← getAttrR "width"        ⤙ img
     iHeight ← getAttrR "height"       ⤙ img
-    returnA ⤙ Image {..}
+    returnA ⤙ Image {..} { iSource = "data/" ++ iSource}
     where
         colorToTriplet x = (h x, h $ drop 2 x, h $ drop 4 x)
             where h (y:z:_) = fromIntegral $ digitToInt y * 16 + digitToInt z
