@@ -50,18 +50,18 @@ getAttrMaybe a = arr tm . getAttrValue a
 
 doMap ∷ FilePath → IOSArrow XmlTree TiledMap
 doMap mapPath = proc m → do
-    mapOrientation ← arr (\x → case x of "orthogonal" → Orthogonal
-                                         "isometric" → Isometric
-                                         _ → error "unsupported orientation")
+    _mapOrientation ← arr (\x → case x of "orthogonal" → Orthogonal
+                                          "isometric" → Isometric
+                                          _ → error "unsupported orientation")
                      . getAttrValue "orientation" ⤙ m
-    mapWidth       ← getAttrR "width"      ⤙ m
-    mapHeight      ← getAttrR "height"     ⤙ m
-    mapTileWidth   ← getAttrR "tilewidth"  ⤙ m
-    mapTileHeight  ← getAttrR "tileheight" ⤙ m
-    mapProperties  ← properties            ⤙ m
-    mapTilesets    ← tilesets              ⤙ m
-    mapLayers      ← layers                ⤙ (m, (mapWidth, mapHeight))
-    returnA        ⤙ TiledMap {..}
+    _mapWidth       ← getAttrR "width"      ⤙ m
+    _mapHeight      ← getAttrR "height"     ⤙ m
+    _mapTileWidth   ← getAttrR "tilewidth"  ⤙ m
+    _mapTileHeight  ← getAttrR "tileheight" ⤙ m
+    _mapProperties  ← properties            ⤙ m
+    _mapTilesets    ← tilesets              ⤙ m
+    _mapLayers      ← layers                ⤙ (m, (_mapWidth, _mapHeight))
+    returnA        ⤙ TiledMap {..} { _mapPath = mapPath }
 
 layers ∷ IOSArrow (XmlTree, (Int, Int)) [Layer]
 layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+> doImageLayer)
@@ -70,16 +70,16 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
 
     object = getChildren >>> isElem >>> hasName "object"
          >>> proc obj → do
-        objectName     ← arr listToMaybe . listA (getAttrValue "name") ⤙ obj
-        objectType     ← arr listToMaybe . listA (getAttrValue "type") ⤙ obj
-        objectX        ← getAttrR "x"                                  ⤙ obj
-        objectY        ← getAttrR "y"                                  ⤙ obj
-        objectWidth    ← arr listToMaybe . listA (getAttrR "width")    ⤙ obj
-        objectHeight   ← arr listToMaybe . listA (getAttrR "height")   ⤙ obj
-        objectGid      ← arr listToMaybe . listA (getAttrR "gid")      ⤙ obj
-        objectPolygon  ← arr listToMaybe . polygon                     ⤙ obj
-        objectPolyline ← arr listToMaybe . polyline                    ⤙ obj
-        objectProperties ← properties                                  ⤙ obj
+        _objectName     ← arr listToMaybe . listA (getAttrValue "name") ⤙ obj
+        _objectType     ← arr listToMaybe . listA (getAttrValue "type") ⤙ obj
+        _objectX        ← getAttrR "x"                                  ⤙ obj
+        _objectY        ← getAttrR "y"                                  ⤙ obj
+        _objectWidth    ← arr listToMaybe . listA (getAttrR "width")    ⤙ obj
+        _objectHeight   ← arr listToMaybe . listA (getAttrR "height")   ⤙ obj
+        _objectGid      ← arr listToMaybe . listA (getAttrR "gid")      ⤙ obj
+        _objectPolygon  ← arr listToMaybe . polygon                     ⤙ obj
+        _objectPolyline ← arr listToMaybe . polyline                    ⤙ obj
+        _objectProperties ← properties                                  ⤙ obj
         returnA      ⤙ Object {..}
 
     polygon ∷ IOSArrow XmlTree [Polygon]
@@ -97,10 +97,10 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
               y = read y'
 
     doImageLayer = arr fst >>> hasName "imagelayer" >>> id &&& image >>> proc (l, layerImage) → do
-        layerName ← getAttrValue "name" ⤙ l
-        layerOpacity ← arr (fromMaybe 1 . listToMaybe) . listA (getAttrR "opacity") ⤙ l
-        layerIsVisible ← arr (isNothing . listToMaybe) . listA (getAttrValue "visible") ⤙ l
-        layerProperties ← properties ⤙ l
+        _layerName ← getAttrValue "name" ⤙ l
+        _layerOpacity ← arr (fromMaybe 1 . listToMaybe) . listA (getAttrR "opacity") ⤙ l
+        _layerIsVisible ← arr (isNothing . listToMaybe) . listA (getAttrValue "visible") ⤙ l
+        _layerProperties ← properties ⤙ l
         returnA ⤙ ImageLayer{..}
 
     doLayer = first (hasName "layer") >>> arr fst &&& (doData >>> arr Left) >>> common
@@ -123,7 +123,12 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
       where
         tileProc = proc tile -> do
           gid <- getAttrR "gid" -< (tile :: XmlTree)
-          returnA -< Tile { tileGid=gid, tileIsVFlipped=False, tileIsHFlipped=False, tileIsDiagFlipped=False }
+          returnA -< Tile 
+            { _tileGid=gid
+            , _tileIsVFlipped=False 
+            , _tileIsHFlipped=False
+            , _tileIsDiagFlipped=False 
+            }
                   
 
     -- Width → Height → Encoding → Compression → Data → [Tile]
@@ -135,7 +140,7 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
                                \gzip/zlib is supported at the moment." ++ show (b, c))
 
     toMap :: Int -> Int -> [Tile] -> Map (Int, Int) Tile
-    toMap w h = fromDistinctAscList . sort . filter (\(_, x) → tileGid x /= 0)
+    toMap w h = fromDistinctAscList . sort . filter (\(_, x) → _tileGid x /= 0)
                 . zip [(x, y) | y ← [0..h-1], x ← [0..w-1]]
 
     base64 f = bytesToTiles . LBS.unpack . f . LBS.fromChunks
@@ -144,22 +149,22 @@ layers = listA (first (getChildren >>> isElem) >>> doObjectGroup <+> doLayer <+>
     bytesToTiles (a:b:c:d:xs) = Tile { .. } : bytesToTiles xs
       where n = f a + f b * 256 + f c * 65536 + f d * 16777216
             f = fromIntegral . fromEnum ∷ Char → Word32
-            tileGid = n `clearBit` 30 `clearBit` 31 `clearBit` 29
-            tileIsVFlipped = n `testBit` 30
-            tileIsHFlipped = n `testBit` 31
-            tileIsDiagFlipped = n `testBit` 29
+            _tileGid = n `clearBit` 30 `clearBit` 31 `clearBit` 29
+            _tileIsVFlipped = n `testBit` 30
+            _tileIsHFlipped = n `testBit` 31
+            _tileIsDiagFlipped = n `testBit` 29
     bytesToTiles [] = []
     bytesToTiles rest = error ("number of bytes not a multiple of 4." ++ show rest)
 
     common = proc (l, x) → do
-        layerName       ← getAttrValue "name"              ⤙ l
-        layerOpacity    ← arr (fromMaybe 1 . listToMaybe)
+        _layerName       ← getAttrValue "name"              ⤙ l
+        _layerOpacity    ← arr (fromMaybe 1 . listToMaybe)
                           . listA (getAttrR "opacity")     ⤙ l
-        layerIsVisible  ← arr (isNothing . listToMaybe)
+        _layerIsVisible  ← arr (isNothing . listToMaybe)
                           . listA (getAttrValue "visible") ⤙ l
-        layerProperties ← properties                      ⤙ l
-        returnA ⤙ case x of Left  layerData    → Layer {..}
-                            Right layerObjects → ObjectLayer {..}
+        _layerProperties ← properties                      ⤙ l
+        returnA ⤙ case x of Left  _layerData    → Layer {..}
+                            Right _layerObjects → ObjectLayer {..}
 
 tilesets ∷ IOSArrow XmlTree [Tileset]
 tilesets = listA $ getChildren >>> isElem >>> hasName "tileset"
@@ -196,20 +201,20 @@ tileData headData = proc ts → do
 
         tData :: IOSArrow XmlTree Tileset
         tData = proc ts -> do
-          tsName        ← getAttrValue "name"     ⤙ ts
-          tsInitialGid  ← (case headData of 
+          _tsName        ← getAttrValue "name"     ⤙ ts
+          _tsInitialGid  ← (case headData of 
             Just (TileSetHead { tshInitialGid }) -> liftArrIO (return . return tshInitialGid)
             _ -> getAttrR "firstgid")     ⤙ ts
-          tsTileWidth   ← getAttrR "tilewidth"    ⤙ ts
-          tsTileHeight  ← getAttrR "tileheight"   ⤙ ts
-          tsMargin      ← (arr $ fromMaybe 0) . getAttrMaybe "margin" ⤙ ts
-          tsSpacing     ← (arr $ fromMaybe 0) . getAttrMaybe "spacing" ⤙ ts
-          tsImages      ← images                  ⤙ ts
-          tsTileProperties ← listA tileProperties ⤙ ts
-          tileIds <- listA (getChildren >>> tileId) -< ts
-          tileImages <- listA (getChildren >>> tileImage) -< ts
-          let tileimgs = fromList $ zip tileIds (concat tileImages)
-          returnA ⤙ (Tileset {..}) { tsTileImages = tileimgs, tsSource = ""}
+          _tsTileWidth   ← getAttrR "tilewidth"    ⤙ ts
+          _tsTileHeight  ← getAttrR "tileheight"   ⤙ ts
+          _tsMargin      ← (arr $ fromMaybe 0) . getAttrMaybe "margin" ⤙ ts
+          _tsSpacing     ← (arr $ fromMaybe 0) . getAttrMaybe "spacing" ⤙ ts
+          _tsImages      ← images                  ⤙ ts
+          _tsTileProperties ← listA tileProperties ⤙ ts
+          _tileIds <- listA (getChildren >>> tileId) -< ts
+          _tileImages <- listA (getChildren >>> tileImage) -< ts
+          let tileimgs = fromList $ zip _tileIds (concat _tileImages)
+          returnA ⤙ (Tileset {..}) { _tsTileImages = tileimgs, _tsSource = ""}
 
 loadTileSet ∷ IOStateArrow () XmlTree XmlTree -> TileSetHead -> IO Tileset
 loadTileSet a headData = head `fmap` runX (
@@ -232,11 +237,11 @@ tileImage = isElem >>> hasName "tile" >>> listA (getChildren >>> proc tile -> do
 
 image ∷ IOSArrow XmlTree Image
 image = isElem >>> hasName "image" >>> proc img → do
-    iSource ← getAttrValue "source"   ⤙ img
-    iTrans  ← arr (fmap colorToTriplet . listToMaybe) . listA (getAttrValue0 "trans") ⤙ img
-    iWidth  ← getAttrR "width"        ⤙ img
-    iHeight ← getAttrR "height"       ⤙ img
-    returnA ⤙ Image {..} { iSource = "data/" ++ iSource}
+    _iSource ← getAttrValue "source"   ⤙ img
+    _iTrans  ← arr (fmap colorToTriplet . listToMaybe) . listA (getAttrValue0 "trans") ⤙ img
+    _iWidth  ← getAttrR "width"        ⤙ img
+    _iHeight ← getAttrR "height"       ⤙ img
+    returnA ⤙ Image {..} { _iSource = "data/" ++ _iSource}
     where
         colorToTriplet x = (h x, h $ drop 2 x, h $ drop 4 x)
             where h (y:z:_) = fromIntegral $ digitToInt y * 16 + digitToInt z
